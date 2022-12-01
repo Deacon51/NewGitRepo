@@ -1,0 +1,179 @@
+name: WordPress
+version: 1
+formatVersion: 1
+description: MySQL Server with Apachie Web server and WordPress
+inputs:
+  size:
+    type: string
+    enum:
+      - small
+      - medium
+      - large
+    description: Size of Nodes
+    title: Tier Machine Size
+#username:
+#type: string
+#minLength: 4
+#maxLength: 20
+#pattern: '[a-z]+'
+#title: Database Username
+#description: Database Username
+#userpassword:
+#type: string
+#pattern: '[a-z0-9A-Z@#$]+'
+#encrypted: true
+#title: Database Password
+#description: Database Password
+resources:
+  Cloud_SaltStack_1:
+    type: Cloud.SaltStack
+    metadata:
+      layoutPosition:
+        - 1
+        - 0
+    properties:
+      hosts:
+        - ${resource.WebTier.id}
+      masterId: ssm01.vmw-sddc.lab_master
+      saltEnvironment: base
+      stateFiles:
+        - /presence/init.sls
+      additionalMinionParams:
+        grains:
+          role:
+            - webserver
+  Cloud_SaltStack_2:
+    type: Cloud.SaltStack
+    metadata:
+      layoutPosition:
+        - 1
+        - 3
+    properties:
+      hosts:
+        - ${resource.DBTier.id}
+      masterId: ssm01.vmw-sddc.lab_master
+      saltEnvironment: base
+      stateFiles:
+        - /presence/init.sls
+      additionalMinionParams:
+        grains:
+          role:
+            - database
+  WebTier:
+    type: Cloud.Machine
+    dependsOn:
+      - DBTier
+    metadata:
+      layoutPosition:
+        - 2
+        - 1
+    properties:
+      ignoreActiveDirectory: true
+      name: wordpress
+      image: Ubuntu_Server
+      flavor: ${input.size}
+      remoteAccess:
+        authentication: generatedPublicPrivateKey
+        username: cloud-admin
+      tags:
+        - key: owner
+          value: ${env.requestedBy}
+        - key: Blueprint
+          value: ${env.blueprintName}
+      cloudConfigSettings:
+        deploymentFailOnCloudConfigRuntimeError: true
+      cloudConfig: |
+        #cloud-config
+        perserve_hostname: false
+        set_hostname: ${self.resourceName}
+        fqdn: ${(self.resourceName)+".vra.vmw-sddc.lab"}
+        users:
+        - default
+        - name: cloud-admin
+          lock_passwd: false
+          shell: '/bin/bash'
+          sudo: 'ALL=(ALL) NOPASSWD:ALL'
+        repo_update: true
+        repo_upgrade: all
+        packages:
+        - apache2
+        - php
+        - php-mysql
+        - libapache2-mod-php
+        - mysql-client
+        - gcc
+        - make
+        - autoconf
+        - libc-dev
+        - pkg-config
+        - libmcrypt-dev
+        - php-pear
+        - php-dev
+        runcmd:
+        - mkdir -p /var/www/html/mywordpresssite && cd /var/www/html && wget https://wordpress.org/latest.tar.gz && tar -xzf /var/www/html/latest.tar.gz -C /var/www/html/mywordpresssite --strip-components 1
+        - i=0; while [ $i -le 10 ]; do mysql --connect-timeout=3 -h ${DBTier.networks[0].address} -u root -pmysqlpassword -e "SHOW STATUS;" && break || sleep 15; i=$((i+1)); done
+        - mysql -u root -pmysqlpassword -h ${DBTier.networks[0].address} -e "create database wordpress_blog;"
+        - mv /var/www/html/mywordpresssite/wp-config-sample.php /var/www/html/mywordpresssite/wp-config.php
+        - pecl channel-update pecl.php.net
+        - pecl update-channels
+        - pecl install mcrypt
+        - sed -i -e s/"define( 'DB_NAME', 'database_name_here' );"/"define( 'DB_NAME', 'wordpress_blog' );"/ /var/www/html/mywordpresssite/wp-config.php && sed -i -e s/"define( 'DB_USER', 'username_here' );"/"define( 'DB_USER', 'root' );"/ /var/www/html/mywordpresssite/wp-config.php && sed -i -e s/"define( 'DB_PASSWORD', 'password_here' );"/"define( 'DB_PASSWORD', 'mysqlpassword' );"/ /var/www/html/mywordpresssite/wp-config.php && sed -i -e s/"define( 'DB_HOST', 'localhost' );"/"define( 'DB_HOST', '${DBTier.networks[0].address}' );"/ /var/www/html/mywordpresssite/wp-config.php
+        - sed -i '950i extension=mcrypt.so' /etc/php/7.4/apache2/php.ini
+        - service apache2 reload
+        - eject
+      networks:
+        - network: ${resource.Cloud_NSX_Network_1.id}
+  DBTier:
+    type: Cloud.Machine
+    metadata:
+      layoutPosition:
+        - 2
+        - 2
+    properties:
+      ignoreActiveDirectory: true
+      name: mysql
+      image: Ubuntu_Server
+      flavor: ${input.size}
+      tags:
+        - key: owner
+          value: ${env.requestedBy}
+        - key: Blueprint
+          value: ${env.blueprintName}
+      remoteAccess:
+        authentication: generatedPublicPrivateKey
+        username: cloud-admin
+      cloudConfigSettings:
+        deploymentFailOnCloudConfigRuntimeError: true
+      cloudConfig: |
+        #cloud-config
+        perserve_hostname: false
+        set_hostname: ${self.resourceName}
+        fqdn: ${(self.resourceName)+".vra.vmw-sddc.lab"}
+        repo_update: true
+        repo_upgrade: all
+        users:
+        - default
+        - name: cloud-admin
+          lock_passwd: false
+          shell: '/bin/bash'
+          sudo: 'ALL=(ALL) NOPASSWD:ALL'
+        packages:
+        - mysql-server
+        runcmd:
+        - sed -e '/bind-address/ s/^#*/#/' -i /etc/mysql/mysql.conf.d/mysqld.cnf
+        - service mysql restart
+        - mysql -e "CREATE USER 'root'@'%' IDENTIFIED BY 'mysqlpassword';" 
+        - mysql -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%';"
+        - mysql -e "FLUSH PRIVILEGES;"
+        - eject
+      attachedDisks: []
+      networks:
+        - network: ${resource.Cloud_NSX_Network_1.id}
+  Cloud_NSX_Network_1:
+    type: Cloud.NSX.Network
+    metadata:
+      layoutPosition:
+        - 3
+        - 0
+    properties:
+      networkType: existing

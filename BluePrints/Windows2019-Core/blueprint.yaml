@@ -1,0 +1,120 @@
+name: Win2019_Core
+version: 1.0
+formatVersion: 1
+inputs:
+  hostname:
+    title: Hostname
+    description: Enter the Hostname
+    type: string
+    minLength: 4
+    maxLength: 12
+    pattern: '[a-zA-Z0-9]'
+  pirmaryDiskSize:
+    type: integer
+    minimum: 90
+    maximum: 500
+  disksize:
+    type: array
+    title: Additional Volumes
+    description: <b>Maximum of 5 addtional drives </b>
+    minItems: 0
+    maxItems: 5
+    items:
+      type: object
+      properties:
+        ID:
+          type: string
+          title: Disk
+        capacity:
+          type: integer
+          title: Capacity
+          description: |-
+            <b> Enter Volume capacity. </b> <br> 
+            Acceptable values: 4-500 GB<br>
+          minimum: 4
+          maximum: 500
+  vCPU:
+    type: integer
+    default: 2
+    minimum: 2
+    maximum: 8
+  memory:
+    title: Memory in GB
+    type: integer
+    default: 2
+    minimum: 2
+    maximum: 16
+resources:
+  Windows:
+    type: Cloud.vSphere.Machine
+    metadata:
+      layoutPosition:
+        - 1
+        - 1
+    allocatePerInstance: true
+    properties:
+      ignoreActiveDirectory: true
+      name: ${input.hostname}
+      cpuCount: ${input.vCPU}
+      totalMemoryMB: ${input.memory * 1024}
+      image: Win2019-Core
+      storage:
+        bootDiskCapacityInGB: ${input.pirmaryDiskSize}
+      attachedDisks: ${map_to_object(resource.disk[*].id, "source")}
+      cloudConfigSettings:
+        deploymentFailOnCloudConfigRuntimeError: true
+      tags:
+        - key: Owner
+          value: ${env.requestedBy}
+      remoteAccess:
+        authentication: generatedPublicPrivateKey
+        username: Administrator
+      cloudConfig: |
+        Content-Type: multipart/mixed; boundary="==NewPart=="
+        MIME-Version: 1.0
+
+        --==NewPart==
+        Content-Type: text/cloud-config; charset="us-ascii"
+        MIME-Version: 1.0
+        Content-Transfer-Encoding: 7bit
+        Content-Disposition: attachment; filename="cloud-config"
+
+        #cloud-config
+        write_files:
+          content: Cloudbase-Init test
+          path: C:\test.txt
+        set_hostname: ${self.resourceName}
+
+        --==NewPart==
+        Content-Type: text/x-shellscript; charset="us-ascii"
+        MIME-Version: 1.0
+        Content-Transfer-Encoding: 7bit
+        Content-Disposition: attachment; filename="INIT.ps1"
+
+        #ps1_sysnative
+        Get-Disk | Where-Object PartitionStyle -Eq "RAW" | Initialize-Disk -PassThru | New-Partition -AssignDriveLetter -UseMaximumSize | Format-Volume -NewFileSystemLabel "DATA"
+        $drives = Get-WmiObject Win32_Volume -Filter "DriveType=5"
+        $drives | ForEach-Object { (New-Object -ComObject Shell.Application).Namespace(17).ParseName($_.Name).InvokeVerb("Eject") } -ErrorAction SilentlyContinue
+        New-NetFirewallRule -DisplayName "ALLOW TCP PORT 445" -Direction inbound -Profile Any -Action Allow -LocalPort 445 -Protocol TCP
+        Set-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv4-In)" -enabled True
+      networks:
+        - network: ${resource.Cloud_vSphere_Network_1.id}
+  disk:
+    type: Cloud.Volume
+    metadata:
+      layoutPosition:
+        - 1
+        - 2
+    allocatePerInstance: true
+    properties:
+      count: ${length(input.disksize)}
+      capacityGb: ${input.disksize[count.index].capacity}
+      name: ${input.disksize[count.index].ID}
+  Cloud_vSphere_Network_1:
+    type: Cloud.vSphere.Network
+    metadata:
+      layoutPosition:
+        - 2
+        - 0
+    properties:
+      networkType: existing

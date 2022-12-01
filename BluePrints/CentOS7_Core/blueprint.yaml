@@ -1,0 +1,97 @@
+name: CentOS7_Core
+version: 1.0
+formatVersion: 1
+inputs:
+  hostname:
+    title: Hostname
+    description: Enter the Hostname
+    type: string
+    minLength: 4
+    maxLength: 12
+    pattren: '[a-zA-Z0-9]'
+  Flavor:
+    type: string
+    title: Size
+    default: Small
+    enum:
+      - Small
+      - Medium
+      - Large
+  disksize:
+    title: Disk Size
+    type: integer
+    minimum: 90
+    maximum: 500
+  role:
+    title: Machine role
+    type: string
+    enum:
+      - webserver
+      - database
+      - application
+      - jumpbox
+resources:
+  Cloud_SaltStack_1:
+    type: Cloud.SaltStack
+    metadata:
+      layoutPosition:
+        - 0
+        - 1
+    properties:
+      hosts:
+        - ${resource.Cloud_Machine_1.id}
+      masterId: ssm01.vmw-sddc.lab_master
+      saltEnvironment: base
+      stateFiles:
+        - /presence/init.sls
+      additionalMinionParams:
+        grains:
+          role:
+            - ${input.role}
+  Cloud_Machine_1:
+    type: Cloud.Machine
+    metadata:
+      layoutPosition:
+        - 1
+        - 1
+    properties:
+      ignoreActiveDirectory: true
+      image: CentOS7_Core
+      flavor: ${input.Flavor}
+      storage:
+        bootDiskCapacityInGB: ${input.disksize}
+      remoteAccess:
+        username: Cloud
+        authentication: generatedPublicPrivateKey
+      name: ${input.hostname}
+      tags:
+        - key: owner
+          value: ${env.requestedBy}
+        - key: Blueprint
+          value: ${env.blueprintName}
+      cloudConfigSettings:
+        deploymentFailOnCloudConfigRuntimeError: true
+      cloudConfig: |
+        #cloud-config
+        perserve_hostname: false
+        set_hostname: ${self.resourceName}
+        fqdn: ${self.resourceName}.test.lab
+        repo_update: true
+        repo_upgrade: all
+        users:
+        - default
+        - name: Cloud
+          shell: '/bin/bash'
+          sudo: 'ALL=(ALL) NOPASSWD:ALL'
+        runcmd:
+         - eject
+      networks:
+        - network: ${resource.Cloud_NSX_Network_1.id}
+  Cloud_NSX_Network_1:
+    type: Cloud.NSX.Network
+    metadata:
+      layoutPosition:
+        - 2
+        - 0
+    properties:
+      networkType: existing
